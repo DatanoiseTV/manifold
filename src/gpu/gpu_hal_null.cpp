@@ -15,7 +15,8 @@
 #include "gpu_hal.h"
 
 // Null backend: used when no GPU is available or MANIFOLD_GPU is off.
-// All methods return failure/empty. This file always compiles on every platform.
+// All methods return failure/empty. This file always compiles on every
+// platform.
 
 #if !defined(MANIFOLD_GPU_METAL) && !defined(MANIFOLD_GPU_OPENCL)
 

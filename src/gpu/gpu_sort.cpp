@@ -53,8 +53,7 @@ bool GpuSortByMorton(Vec<int>& new2Old, const Vec<uint32_t>& morton,
   // Each workgroup processes numBlocksPerWG * 256 elements.
   uint32_t numWorkgroups = 16;  // Reasonable for Apple Silicon (20 CUs)
   uint32_t elemsPerWG = (n + numWorkgroups - 1) / numWorkgroups;
-  uint32_t numBlocksPerWG =
-      (elemsPerWG + kWorkgroupSize - 1) / kWorkgroupSize;
+  uint32_t numBlocksPerWG = (elemsPerWG + kWorkgroupSize - 1) / kWorkgroupSize;
   if (numBlocksPerWG == 0) numBlocksPerWG = 1;
 
   // Allocate buffers.
@@ -62,8 +61,7 @@ bool GpuSortByMorton(Vec<int>& new2Old, const Vec<uint32_t>& morton,
   auto valsA = ctx.upload(new2Old.data(), n * sizeof(int32_t));
   auto keysB = ctx.allocate(n * sizeof(uint32_t));
   auto valsB = ctx.allocate(n * sizeof(int32_t));
-  auto histBuf =
-      ctx.allocate(numWorkgroups * 256 * sizeof(uint32_t));
+  auto histBuf = ctx.allocate(numWorkgroups * 256 * sizeof(uint32_t));
   if (!keysA || !valsA || !keysB || !valsB || !histBuf) return false;
 
   // 4 passes (8 bits per pass, 32-bit keys).
@@ -107,8 +105,15 @@ bool GpuSortByMorton(Vec<int>& new2Old, const Vec<uint32_t>& morton,
   }
 
   // After 4 passes (even), result is in B buffers.
-  ctx.download(swapped ? valsB : valsA, new2Old.data(),
-               n * sizeof(int32_t));
+  ctx.download(swapped ? valsB : valsA, new2Old.data(), n * sizeof(int32_t));
+
+#ifdef MANIFOLD_DEBUG
+  // Verify sort correctness in debug builds.
+  for (uint32_t i = 1; i < n; i++) {
+    DEBUG_ASSERT(morton[new2Old[i]] >= morton[new2Old[i - 1]], logicErr,
+                 "GPU radix sort produced unsorted output");
+  }
+#endif
 
   return true;
 }
@@ -132,10 +137,10 @@ void BuildColliderGpu(Collider& collider, const VecView<const Box>& leafBB,
   auto treePL = ctx.getPipeline("create_radix_tree");
   bool gpuDone = false;
   if (treePL && numInternal > 0) {
-    auto gpuMorton = ctx.upload(leafMorton.data(),
-                                numLeaves * sizeof(uint32_t));
-    auto gpuParent = ctx.upload(collider.nodeParent_.data(),
-                                numNodes * sizeof(int32_t));
+    auto gpuMorton =
+        ctx.upload(leafMorton.data(), numLeaves * sizeof(uint32_t));
+    auto gpuParent =
+        ctx.upload(collider.nodeParent_.data(), numNodes * sizeof(int32_t));
     // int2 is layout-compatible with pair<int,int> on Metal (both 8 bytes)
     auto gpuChildren = ctx.upload(collider.internalChildren_.data(),
                                   numInternal * 2 * sizeof(int32_t));
@@ -161,10 +166,10 @@ void BuildColliderGpu(Collider& collider, const VecView<const Box>& leafBB,
 
   if (!gpuDone) {
     // CPU fallback.
-    for_each_n(autoPolicy(numInternal, 1e4), countAt(0), numInternal,
-               collider_internal::CreateRadixTree(
-                   {collider.nodeParent_, collider.internalChildren_,
-                    leafMorton}));
+    for_each_n(
+        autoPolicy(numInternal, 1e4), countAt(0), numInternal,
+        collider_internal::CreateRadixTree(
+            {collider.nodeParent_, collider.internalChildren_, leafMorton}));
   }
 
   // BuildInternalBoxes on CPU (requires fp64 Box unions).
@@ -176,13 +181,12 @@ void SortGeometryGpu(Manifold::Impl& impl) {
   const auto numVert = impl.NumVert();
   Vec<uint32_t> vertMorton(numVert);
   auto vertPolicy = autoPolicy(numVert, 1e5);
-  for_each_n(vertPolicy, countAt(0), numVert,
-             [&impl, &vertMorton](const int vert) {
-               const vec3 pos = impl.vertPos_[vert];
-               vertMorton[vert] = std::isnan(pos.x)
-                                      ? kNoCode
-                                      : Collider::MortonCode(pos, impl.bBox_);
-             });
+  for_each_n(
+      vertPolicy, countAt(0), numVert, [&impl, &vertMorton](const int vert) {
+        const vec3 pos = impl.vertPos_[vert];
+        vertMorton[vert] =
+            std::isnan(pos.x) ? kNoCode : Collider::MortonCode(pos, impl.bBox_);
+      });
 
   Vec<int> vertNew2Old(numVert);
   sequence(vertNew2Old.begin(), vertNew2Old.end());

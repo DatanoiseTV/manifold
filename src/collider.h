@@ -363,7 +363,7 @@ class Collider {
     return true;
   }
 
- // GPU acceleration needs access to build tree arrays externally.
+  // GPU acceleration needs access to build tree arrays externally.
   friend void gpu::BuildColliderGpu(Collider& collider,
                                     const VecView<const Box>& leafBB,
                                     const VecView<const uint32_t>& leafMorton);

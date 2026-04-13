@@ -50,15 +50,20 @@ class CLBuffer : public GpuBuffer {
   size_t size() const override { return size_; }
 
   void* map() override {
+    if (mapped_) return mapped_;
     cl_int err;
-    void* ptr = clEnqueueMapBuffer(queue_, mem_, CL_TRUE, CL_MAP_READ | CL_MAP_WRITE,
-                                   0, size_, 0, nullptr, nullptr, &err);
-    return (err == CL_SUCCESS) ? ptr : nullptr;
+    mapped_ =
+        clEnqueueMapBuffer(queue_, mem_, CL_TRUE, CL_MAP_READ | CL_MAP_WRITE, 0,
+                           size_, 0, nullptr, nullptr, &err);
+    if (err != CL_SUCCESS) mapped_ = nullptr;
+    return mapped_;
   }
 
   void unmap() override {
-    void* ptr = map();
-    if (ptr) clEnqueueUnmapMemObject(queue_, mem_, ptr, 0, nullptr, nullptr);
+    if (mapped_) {
+      clEnqueueUnmapMemObject(queue_, mem_, mapped_, 0, nullptr, nullptr);
+      mapped_ = nullptr;
+    }
   }
 
   void* nativeHandle() override { return (void*)mem_; }
@@ -68,6 +73,7 @@ class CLBuffer : public GpuBuffer {
   cl_mem mem_;
   size_t size_;
   cl_command_queue queue_;
+  void* mapped_ = nullptr;
 };
 
 // ---------------------------------------------------------------------------
@@ -127,8 +133,8 @@ class CLCommandBatch : public GpuCommandBatch {
 
     size_t globalSize = (size_t)threadgroups * threadsPerGroup;
     size_t localSize = threadsPerGroup;
-    clEnqueueNDRangeKernel(queue_, k, 1, nullptr, &globalSize, &localSize,
-                           0, nullptr, nullptr);
+    clEnqueueNDRangeKernel(queue_, k, 1, nullptr, &globalSize, &localSize, 0,
+                           nullptr, nullptr);
   }
 
   void barrier() override {
@@ -181,8 +187,8 @@ class CLContext : public GpuContext {
 
   void download(const GpuBufferPtr& buf, void* dst, size_t bytes) override {
     auto* cb = static_cast<CLBuffer*>(buf.get());
-    clEnqueueReadBuffer(queue_, cb->clMem(), CL_TRUE, 0, bytes, dst,
-                        0, nullptr, nullptr);
+    clEnqueueReadBuffer(queue_, cb->clMem(), CL_TRUE, 0, bytes, dst, 0, nullptr,
+                        nullptr);
   }
 
   GpuCommandBatchPtr createBatch() override {
@@ -241,18 +247,25 @@ class CLContext : public GpuContext {
       // Create context.
       cl_int err;
       ctx_ = clCreateContext(nullptr, 1, &device_, nullptr, nullptr, &err);
-      if (err != CL_SUCCESS) { device_ = nullptr; continue; }
+      if (err != CL_SUCCESS) {
+        device_ = nullptr;
+        continue;
+      }
 
       queue_ = clCreateCommandQueue(ctx_, device_, 0, &err);
       if (err != CL_SUCCESS) {
-        clReleaseContext(ctx_); ctx_ = nullptr; device_ = nullptr;
+        clReleaseContext(ctx_);
+        ctx_ = nullptr;
+        device_ = nullptr;
         continue;
       }
 
       // Load and compile kernel source.
       if (!loadKernels()) {
-        clReleaseCommandQueue(queue_); queue_ = nullptr;
-        clReleaseContext(ctx_); ctx_ = nullptr;
+        clReleaseCommandQueue(queue_);
+        queue_ = nullptr;
+        clReleaseContext(ctx_);
+        ctx_ = nullptr;
         device_ = nullptr;
         continue;
       }
@@ -289,12 +302,13 @@ class CLContext : public GpuContext {
   }
 
   std::string loadFile(const char* filename) {
-    // Search relative to executable, current dir, etc.
-    const char* paths[] = {filename, "../Resources/%s", "../share/%s"};
+    std::string paths[] = {
+        filename,
+        std::string("../Resources/") + filename,
+        std::string("../share/") + filename,
+    };
     for (auto& p : paths) {
-      char buf[512];
-      snprintf(buf, sizeof(buf), p, filename);
-      std::ifstream f(buf);
+      std::ifstream f(p);
       if (f.good()) {
         std::ostringstream ss;
         ss << f.rdbuf();

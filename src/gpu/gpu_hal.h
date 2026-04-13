@@ -122,8 +122,7 @@ class GpuContext {
   virtual GpuBufferPtr upload(const void* data, size_t bytes) = 0;
 
   // Download GPU buffer contents to CPU memory.
-  virtual void download(const GpuBufferPtr& buf, void* dst,
-                        size_t bytes) = 0;
+  virtual void download(const GpuBufferPtr& buf, void* dst, size_t bytes) = 0;
 
   // Create a new command batch for recording dispatches.
   virtual GpuCommandBatchPtr createBatch() = 0;

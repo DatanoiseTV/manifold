@@ -90,8 +90,7 @@ class MetalCommandBatch : public GpuCommandBatch {
     [encoder_ setBytes:data length:length atIndex:index];
   }
 
-  void dispatch(GpuPipelinePtr pipeline, uint32_t threadgroups,
-                uint32_t threadsPerGroup) override {
+  void dispatch(GpuPipelinePtr pipeline, uint32_t threadgroups, uint32_t threadsPerGroup) override {
     ensureEncoder();
     auto* mp = static_cast<MetalPipeline*>(pipeline.get());
     [encoder_ setComputePipelineState:mp->pso()];
@@ -136,9 +135,7 @@ class MetalContext : public GpuContext {
  public:
   MetalContext() { init(); }
 
-  Backend backend() const override {
-    return device_ ? Backend::Metal : Backend::None;
-  }
+  Backend backend() const override { return device_ ? Backend::Metal : Backend::None; }
 
   bool hasFloat64() const override {
     // Apple Silicon GPUs do not have native fp64.
@@ -148,9 +145,7 @@ class MetalContext : public GpuContext {
   GpuBufferPtr allocate(size_t bytes) override {
     if (!device_) return nullptr;
     @autoreleasepool {
-      id<MTLBuffer> buf =
-          [device_ newBufferWithLength:bytes
-                               options:MTLResourceStorageModeShared];
+      id<MTLBuffer> buf = [device_ newBufferWithLength:bytes options:MTLResourceStorageModeShared];
       if (!buf) return nullptr;
       return std::make_shared<MetalBuffer>(buf);
     }
@@ -159,10 +154,9 @@ class MetalContext : public GpuContext {
   GpuBufferPtr upload(const void* data, size_t bytes) override {
     if (!device_) return nullptr;
     @autoreleasepool {
-      id<MTLBuffer> buf =
-          [device_ newBufferWithBytes:data
-                               length:bytes
-                              options:MTLResourceStorageModeShared];
+      id<MTLBuffer> buf = [device_ newBufferWithBytes:data
+                                               length:bytes
+                                              options:MTLResourceStorageModeShared];
       if (!buf) return nullptr;
       return std::make_shared<MetalBuffer>(buf);
     }
@@ -185,17 +179,15 @@ class MetalContext : public GpuContext {
     if (it != pipelineCache_.end()) return it->second;
 
     @autoreleasepool {
-      NSString* name =
-          [NSString stringWithUTF8String:kernelName.c_str()];
+      NSString* name = [NSString stringWithUTF8String:kernelName.c_str()];
       id<MTLFunction> fn = [library_ newFunctionWithName:name];
       if (!fn) return nullptr;
 
       NSError* error = nil;
-      id<MTLComputePipelineState> pso =
-          [device_ newComputePipelineStateWithFunction:fn error:&error];
+      id<MTLComputePipelineState> pso = [device_ newComputePipelineStateWithFunction:fn
+                                                                               error:&error];
       if (!pso) {
-        NSLog(@"[manifold GPU] Failed to create pipeline '%s': %@",
-              kernelName.c_str(), error);
+        NSLog(@"[manifold GPU] Failed to create pipeline '%s': %@", kernelName.c_str(), error);
         return nullptr;
       }
       auto pipeline = std::make_shared<MetalPipeline>(pso);
@@ -224,8 +216,7 @@ class MetalContext : public GpuContext {
       // Try loading pre-compiled metallib from bundle or working directory.
       NSError* error = nil;
       NSBundle* bundle = [NSBundle mainBundle];
-      NSString* libPath =
-          [bundle pathForResource:@"sort" ofType:@"metallib"];
+      NSString* libPath = [bundle pathForResource:@"sort" ofType:@"metallib"];
 
       if (libPath) {
         NSURL* url = [NSURL fileURLWithPath:libPath];
@@ -234,17 +225,14 @@ class MetalContext : public GpuContext {
 
       // Fallback: compile from source at runtime.
       if (!library_) {
-        NSString* srcPath =
-            [bundle pathForResource:@"sort" ofType:@"metal"];
+        NSString* srcPath = [bundle pathForResource:@"sort" ofType:@"metal"];
         if (!srcPath) {
           // Search relative to executable.
-          NSString* execDir =
-              [[[NSProcessInfo processInfo].arguments firstObject]
-                  stringByDeletingLastPathComponent];
+          NSString* execDir = [[[NSProcessInfo processInfo].arguments firstObject]
+              stringByDeletingLastPathComponent];
           NSArray* paths = @[
             [execDir stringByAppendingPathComponent:@"sort.metal"],
-            [execDir
-                stringByAppendingPathComponent:@"../Resources/sort.metal"],
+            [execDir stringByAppendingPathComponent:@"../Resources/sort.metal"],
           ];
           for (NSString* p in paths) {
             if ([[NSFileManager defaultManager] fileExistsAtPath:p]) {
@@ -254,15 +242,13 @@ class MetalContext : public GpuContext {
           }
         }
         if (srcPath) {
-          NSString* src =
-              [NSString stringWithContentsOfFile:srcPath
-                                       encoding:NSUTF8StringEncoding
-                                          error:&error];
+          NSString* src = [NSString stringWithContentsOfFile:srcPath
+                                                    encoding:NSUTF8StringEncoding
+                                                       error:&error];
           if (src) {
             MTLCompileOptions* opts = [[MTLCompileOptions alloc] init];
             opts.fastMathEnabled = YES;
-            library_ =
-                [device_ newLibraryWithSource:src options:opts error:&error];
+            library_ = [device_ newLibraryWithSource:src options:opts error:&error];
           }
         }
       }

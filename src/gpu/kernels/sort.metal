@@ -159,8 +159,8 @@ kernel void radix_sort_scatter(
 // Collider BVH construction — CreateRadixTree (pure integer ops)
 // ---------------------------------------------------------------------------
 
-inline int tree_tree_Leaf2Node(int leaf) { return leaf * 2; }
-inline int tree_tree_Internal2Node(int internal) { return internal * 2 + 1; }
+inline int tree_Leaf2Node(int leaf) { return leaf * 2; }
+inline int tree_Internal2Node(int internal) { return internal * 2 + 1; }
 
 constant int kInitialLength = 4;
 constant int kLengthMultiple = 4;
