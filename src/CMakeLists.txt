@@ -59,6 +59,14 @@ set(MANIFOLD_INCLUDE_DIRS ${PROJECT_SOURCE_DIR}/include)
 
 add_library(manifold ${MANIFOLD_SRCS} ${MANIFOLD_PRIVATE_HDRS})
 
+# GPU compute acceleration (optional)
+if(MANIFOLD_GPU)
+  add_subdirectory(gpu)
+  target_link_libraries(manifold PRIVATE manifold_gpu)
+  target_compile_options(manifold PUBLIC -DMANIFOLD_GPU=1)
+  target_include_directories(manifold PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/gpu)
+endif()
+
 target_link_libraries(manifold PUBLIC $<$<BOOL:${TRACY_ENABLE}>:TracyClient>)
 
 target_link_libraries(

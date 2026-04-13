@@ -18,6 +18,14 @@
 #include "utils.h"
 #include "vec.h"
 
+namespace manifold {
+class Collider;
+namespace gpu {
+void BuildColliderGpu(Collider& collider, const VecView<const Box>& leafBB,
+                      const VecView<const uint32_t>& leafMorton);
+}
+}  // namespace manifold
+
 #ifdef _MSC_VER
 #include <intrin.h>
 #endif
@@ -354,6 +362,11 @@ class Collider {
     }
     return true;
   }
+
+ // GPU acceleration needs access to build tree arrays externally.
+  friend void gpu::BuildColliderGpu(Collider& collider,
+                                    const VecView<const Box>& leafBB,
+                                    const VecView<const uint32_t>& leafMorton);
 
  private:
   Vec<Box> nodeBBox_;

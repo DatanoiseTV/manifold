@@ -20,6 +20,11 @@
 #include "parallel.h"
 #include "shared.h"
 
+#ifdef MANIFOLD_GPU
+#include "gpu/gpu_hal.h"
+#include "gpu/gpu_sort.h"
+#endif
+
 namespace {
 using namespace manifold;
 
@@ -194,6 +199,15 @@ void Manifold::Impl::SortGeometry() {
   }
 
   halfedge_.MakeUnique();
+
+#ifdef MANIFOLD_GPU
+  if (gpu::GpuContext::instance().isAvailable() &&
+      NumTri() > gpu::kGpuSortThreshold) {
+    gpu::SortGeometryGpu(*this);
+    return;
+  }
+#endif
+
   SortVerts();
   Vec<Box> faceBox;
   Vec<uint32_t> faceMorton;

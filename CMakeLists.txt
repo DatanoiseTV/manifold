@@ -47,6 +47,9 @@ option(
   ON
 )
 option(MANIFOLD_PAR "Enable Parallel backend" OFF)
+option(MANIFOLD_GPU "Enable GPU compute acceleration" OFF)
+option(MANIFOLD_GPU_METAL "Use Metal GPU backend (macOS)" OFF)
+option(MANIFOLD_GPU_OPENCL "Use OpenCL GPU backend" OFF)
 option(
   MANIFOLD_OPTIMIZED
   "Force optimized build, even with debugging enabled"
