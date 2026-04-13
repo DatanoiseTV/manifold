@@ -80,6 +80,14 @@ elseif(MANIFOLD_GPU_OPENCL)
   )
   target_compile_definitions(manifold_gpu PUBLIC MANIFOLD_GPU_OPENCL)
   target_link_libraries(manifold_gpu PRIVATE OpenCL::OpenCL)
+
+  # Copy OpenCL kernel source for runtime compilation.
+  set(CL_KERNEL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/kernels/sort.cl)
+  add_custom_command(TARGET manifold_gpu POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      ${CL_KERNEL_SRC} ${CMAKE_BINARY_DIR}/sort.cl
+    COMMENT "Copying OpenCL sort kernel to build directory")
+
   message(STATUS "GPU backend: OpenCL")
 
 else()
