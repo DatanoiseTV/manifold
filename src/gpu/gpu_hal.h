@@ -29,7 +29,7 @@ namespace gpu {
 
 // Minimum triangle count before GPU dispatch is worthwhile.
 // Below this, per-command-buffer overhead (~50-100us) exceeds the gains.
-constexpr size_t kGpuSortThreshold = 20000;
+constexpr size_t kGpuSortThreshold = 8000;
 constexpr size_t kGpuCollisionThreshold = 5000;
 
 enum class Backend { None, Metal, OpenCL };

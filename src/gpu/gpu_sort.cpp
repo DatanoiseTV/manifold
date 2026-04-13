@@ -18,7 +18,6 @@
 
 #include "gpu_sort.h"
 
-#include <chrono>
 #include <cstring>
 #include <vector>
 
@@ -173,7 +172,6 @@ void BuildColliderGpu(Collider& collider, const VecView<const Box>& leafBB,
 }
 
 void SortGeometryGpu(Manifold::Impl& impl) {
-  auto t0 = std::chrono::high_resolution_clock::now();
   // --- SortVerts: compute Morton codes on CPU, sort on GPU ---
   const auto numVert = impl.NumVert();
   Vec<uint32_t> vertMorton(numVert);
@@ -245,9 +243,6 @@ void SortGeometryGpu(Manifold::Impl& impl) {
 
   BuildColliderGpu(impl.collider_, faceBox, faceMorton);
   impl.CompactProps();
-  auto t1 = std::chrono::high_resolution_clock::now();
-  fprintf(stderr, "[manifold GPU] SortGeometryGpu total: %.1fms\n",
-          std::chrono::duration<double, std::milli>(t1 - t0).count());
 }
 
 }  // namespace gpu
