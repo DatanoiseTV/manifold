@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-set(GPU_COMMON_SRCS gpu_sort.cpp gpu_collider.cpp)
+set(GPU_COMMON_SRCS gpu_sort.cpp gpu_collider.cpp gpu_boolean.cpp)
 
 if(MANIFOLD_GPU_WEBGPU)
   set(DAWN_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/dawn)
@@ -59,6 +59,7 @@ if(MANIFOLD_GPU_WEBGPU)
     fp64_test.wgsl
     fp64_lib.wgsl
     intersect_kernel.wgsl
+    kernel12_dispatch.wgsl
   )
   foreach(KERNEL ${WGSL_KERNELS})
     add_custom_command(TARGET manifold_gpu POST_BUILD

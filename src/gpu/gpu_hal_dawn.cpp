@@ -412,7 +412,8 @@ class DawnContextPool : public GpuContext {
       return nullptr;
     }
     // Kernels using fp64 arithmetic prepend the shared library.
-    if (kernelName == "fp64_test" || kernelName == "intersect_kernel") {
+    if (kernelName == "fp64_test" || kernelName == "intersect_kernel" ||
+        kernelName == "kernel12_dispatch") {
       std::string lib = loadFile("fp64_lib.wgsl");
       if (lib.empty()) {
         fprintf(stderr, "[manifold GPU] cannot load fp64_lib.wgsl\n");

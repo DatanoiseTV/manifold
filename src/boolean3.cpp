@@ -21,6 +21,9 @@
 #include "disjoint_sets.h"
 #include "parallel.h"
 #ifdef MANIFOLD_GPU
+#include <cstdlib>
+
+#include "gpu/gpu_boolean.h"
 #include "gpu/gpu_hal.h"
 #endif
 
@@ -380,14 +383,49 @@ Intersections Intersect12_(const Manifold::Impl& inP,
 
   const size_t numQueries = a.halfedge_.size();
   if (precomputedPairs != nullptr) {
-    // GPU produced the pairs already (batched with the other direction).
-    // Run fp64 intersection math on CPU (TBB) over them.
-    for_each_n(autoPolicy(precomputedPairs->size(), 1e4), countAt(size_t{0}),
-               precomputedPairs->size(), [&](size_t i) {
-                 auto& local = recorder.local();
-                 recorder.record((*precomputedPairs)[i].first,
-                                 (*precomputedPairs)[i].second, local);
-               });
+    const auto& pairs = *precomputedPairs;
+#ifdef MANIFOLD_GPU
+    // GPU Kernel12: do the fp64 intersection math on GPU using the fp64_lib
+    // emulation. Produces x12/v12 per pair, matching CPU output to ~1e-13.
+    // Gated by env var during bring-up because per-pair work is O(1000s of
+    // emulated ops) which can exceed GPU TDR for large batches.
+    static const bool kGpuKernelEnabled =
+        std::getenv("MANIFOLD_GPU_KERNEL") != nullptr;
+    if (kGpuKernelEnabled && gpu::GpuContext::instance().isAvailable()) {
+      Vec<int> gpuX;
+      Vec<vec3> gpuV;
+      if (gpu::IntersectGpu(inP, inQ, pairs, expandP, forward, gpuX, gpuV)) {
+        // Merge GPU results straight into the recorder's local store. Only
+        // finite v12 hits count (same filter CPU does).
+        auto& local = recorder.local();
+        for (size_t i = 0; i < pairs.size(); i++) {
+          if (!std::isfinite(gpuV[i][0])) continue;
+          if (forward) {
+            local.p1q2.push_back({pairs[i].first, pairs[i].second});
+          } else {
+            local.p1q2.push_back({pairs[i].second, pairs[i].first});
+          }
+          local.x12.push_back(gpuX[i]);
+          local.v12.push_back(gpuV[i]);
+        }
+      } else {
+        // CPU fallback — GPU couldn't run, e.g. missing vertNormal_.
+        for_each_n(autoPolicy(pairs.size(), 1e4), countAt(size_t{0}),
+                   pairs.size(), [&](size_t i) {
+                     auto& local = recorder.local();
+                     recorder.record(pairs[i].first, pairs[i].second, local);
+                   });
+      }
+    } else
+#endif
+    {
+      // Standard CPU path: fp64 math on each precomputed pair.
+      for_each_n(autoPolicy(pairs.size(), 1e4), countAt(size_t{0}),
+                 pairs.size(), [&](size_t i) {
+                   auto& local = recorder.local();
+                   recorder.record(pairs[i].first, pairs[i].second, local);
+                 });
+    }
   } else {
     b.collider_.Collisions<false>(recorder, f, numQueries);
   }
