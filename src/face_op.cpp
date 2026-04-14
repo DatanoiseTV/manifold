@@ -58,6 +58,12 @@ std::vector<std::vector<int>> AssembleHalfedges(VecView<Halfedge>::IterC start,
     polys.back().push_back(startHalfedgeIdx + thisEdge);
     const auto result = vert_edge.find((start + thisEdge)->endVert);
     DEBUG_ASSERT(result != vert_edge.end(), topologyErr, "non-manifold edge");
+    if (result == vert_edge.end()) {
+      // Release-mode fallback: bail out on broken topology rather than
+      // dereferencing an end() iterator. Caller gets the polys assembled so
+      // far; downstream triangulation may skip the affected face.
+      return polys;
+    }
     thisEdge = result->second;
     vert_edge.erase(result);
   }

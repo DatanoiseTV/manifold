@@ -12,9 +12,65 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-set(GPU_COMMON_SRCS gpu_sort.cpp)
+set(GPU_COMMON_SRCS gpu_sort.cpp gpu_collider.cpp)
 
-if(MANIFOLD_GPU_METAL AND APPLE)
+if(MANIFOLD_GPU_WEBGPU)
+  set(DAWN_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/dawn)
+  if(NOT EXISTS ${DAWN_DIR}/CMakeLists.txt)
+    message(FATAL_ERROR
+      "MANIFOLD_GPU_WEBGPU=ON but Dawn submodule is missing at ${DAWN_DIR}. "
+      "Run: git submodule update --init --recursive")
+  endif()
+
+  # Minimal Dawn configuration: compute-only, monolithic static lib, no samples.
+  set(DAWN_FETCH_DEPENDENCIES ON CACHE BOOL "" FORCE)
+  set(DAWN_BUILD_MONOLITHIC_LIBRARY "STATIC" CACHE STRING "" FORCE)
+  set(DAWN_BUILD_SAMPLES OFF CACHE BOOL "" FORCE)
+  set(DAWN_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  set(DAWN_BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+  set(DAWN_USE_GLFW OFF CACHE BOOL "" FORCE)
+  set(TINT_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  set(TINT_BUILD_CMD_TOOLS OFF CACHE BOOL "" FORCE)
+  set(TINT_BUILD_IR_BINARY OFF CACHE BOOL "" FORCE)
+
+  # Dawn's monolithic library mode requires BUILD_SHARED_LIBS=OFF so the
+  # bundled lib doesn't depend on other shared libs.
+  set(_OLD_BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS})
+  set(BUILD_SHARED_LIBS OFF)
+  add_subdirectory(${DAWN_DIR} ${CMAKE_CURRENT_BINARY_DIR}/dawn EXCLUDE_FROM_ALL)
+  set(BUILD_SHARED_LIBS ${_OLD_BUILD_SHARED_LIBS})
+
+  add_library(manifold_gpu
+    gpu_hal_dawn.cpp
+    gpu_hal_null.cpp
+    ${GPU_COMMON_SRCS}
+  )
+  target_compile_definitions(manifold_gpu PUBLIC MANIFOLD_GPU_WEBGPU)
+  target_link_libraries(manifold_gpu PRIVATE webgpu_dawn)
+
+  # Copy WGSL kernel sources for runtime loading. One kernel per file so that
+  # resource bindings don't collide at module level.
+  set(WGSL_KERNELS
+    radix_sort_histograms.wgsl
+    radix_sort_scatter.wgsl
+    create_radix_tree.wgsl
+    build_internal_boxes.wgsl
+    find_collisions.wgsl
+    fp64_test.wgsl
+    fp64_lib.wgsl
+    intersect_kernel.wgsl
+  )
+  foreach(KERNEL ${WGSL_KERNELS})
+    add_custom_command(TARGET manifold_gpu POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_CURRENT_SOURCE_DIR}/kernels/${KERNEL}
+        ${CMAKE_BINARY_DIR}/${KERNEL}
+      COMMENT "Copying ${KERNEL} to build directory")
+  endforeach()
+
+  message(STATUS "GPU backend: WebGPU via Dawn")
+
+elseif(MANIFOLD_GPU_METAL AND APPLE)
   enable_language(OBJCXX)
   find_library(METAL_FRAMEWORK Metal)
   find_library(FOUNDATION_FRAMEWORK Foundation)
@@ -103,7 +159,10 @@ target_include_directories(manifold_gpu PRIVATE
 target_compile_features(manifold_gpu PUBLIC cxx_std_17)
 
 # Export alongside manifold so install(EXPORT manifoldTargets) works.
-install(TARGETS manifold_gpu EXPORT manifoldTargets)
+# See note in ../CMakeLists.txt — skipped under WebGPU (Dawn transitive deps).
+if(NOT MANIFOLD_GPU_WEBGPU)
+  install(TARGETS manifold_gpu EXPORT manifoldTargets)
+endif()
 
 # Inherit compile options from parent manifold target so that
 # MANIFOLD_PAR, MANIFOLD_DEBUG, etc. are defined consistently.

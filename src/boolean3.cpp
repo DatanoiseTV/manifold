@@ -17,8 +17,12 @@
 #include <limits>
 #include <unordered_set>
 
+#include "collider.h"
 #include "disjoint_sets.h"
 #include "parallel.h"
+#ifdef MANIFOLD_GPU
+#include "gpu/gpu_hal.h"
+#endif
 
 #if (MANIFOLD_PAR == 1)
 #include <tbb/combinable.h>
@@ -354,7 +358,9 @@ struct Kernel12Recorder {
 
 template <bool expandP, bool forward>
 Intersections Intersect12_(const Manifold::Impl& inP,
-                           const Manifold::Impl& inQ) {
+                           const Manifold::Impl& inQ,
+                           const Vec<std::pair<int, int>>* precomputedPairs =
+                               nullptr) {
   ZoneScoped;
   // a: 1 (edge), b: 2 (face)
   const Manifold::Impl& a = forward ? inP : inQ;
@@ -371,7 +377,20 @@ Intersections Intersect12_(const Manifold::Impl& inP,
                      a.vertPos_[a.halfedge_[i].endVert])
                : Box();
   };
-  b.collider_.Collisions<false>(recorder, f, a.halfedge_.size());
+
+  const size_t numQueries = a.halfedge_.size();
+  if (precomputedPairs != nullptr) {
+    // GPU produced the pairs already (batched with the other direction).
+    // Run fp64 intersection math on CPU (TBB) over them.
+    for_each_n(autoPolicy(precomputedPairs->size(), 1e4), countAt(size_t{0}),
+               precomputedPairs->size(), [&](size_t i) {
+                 auto& local = recorder.local();
+                 recorder.record((*precomputedPairs)[i].first,
+                                 (*precomputedPairs)[i].second, local);
+               });
+  } else {
+    b.collider_.Collisions<false>(recorder, f, numQueries);
+  }
 
   Intersections result = recorder.get();
   auto& p1q2 = result.p1q2;
@@ -479,7 +498,7 @@ Vec<int> Winding03(const Manifold::Impl& inP, const Manifold::Impl& inQ,
 
 namespace manifold {
 Boolean3::Boolean3(const Manifold::Impl& inP, const Manifold::Impl& inQ,
-                   OpType op)
+                   OpType op, const Boolean3Pairs* precomputed)
     : inP_(inP), inQ_(inQ), expandP_(op == OpType::Add) {
   ZoneScoped;
   // Symbolic perturbation:
@@ -507,8 +526,58 @@ Boolean3::Boolean3(const Manifold::Impl& inP, const Manifold::Impl& inQ,
   // Build up the intersection of the edges and triangles, keeping only those
   // that intersect, and record the direction the edge is passing through the
   // triangle.
-  xv12_ = Intersect12<true>(inP, inQ, expandP_);
-  xv21_ = Intersect12<false>(inP, inQ, expandP_);
+#ifdef MANIFOLD_GPU
+  Vec<std::pair<int, int>> gpuFwdPairs, gpuBwdPairs;
+  bool gpuPairsReady = false;
+
+  if (precomputed != nullptr) {
+    // Caller (BatchBoolean) already ran the GPU collision queries as part of
+    // a fused N-way submit — just thread them through to Intersect12_.
+    gpuFwdPairs = precomputed->fwd;
+    gpuBwdPairs = precomputed->bwd;
+    gpuPairsReady = true;
+  } else {
+    auto& ctx = gpu::GpuContext::instance();
+    const size_t numFwdQ = inP.halfedge_.size();
+    const size_t numBwdQ = inQ.halfedge_.size();
+    if (ctx.isAvailable() && numFwdQ > gpu::kGpuCollisionThreshold &&
+        numBwdQ > gpu::kGpuCollisionThreshold) {
+      Vec<Box> fwdQ(numFwdQ), bwdQ(numBwdQ);
+      for_each_n(autoPolicy(numFwdQ, 1e4), countAt(size_t{0}), numFwdQ,
+                 [&](size_t i) {
+                   const Halfedge& he = inP.halfedge_[i];
+                   fwdQ[i] = he.IsForward()
+                                 ? Box(inP.vertPos_[he.startVert],
+                                       inP.vertPos_[he.endVert])
+                                 : Box();
+                 });
+      for_each_n(autoPolicy(numBwdQ, 1e4), countAt(size_t{0}), numBwdQ,
+                 [&](size_t i) {
+                   const Halfedge& he = inQ.halfedge_[i];
+                   bwdQ[i] = he.IsForward()
+                                 ? Box(inQ.vertPos_[he.startVert],
+                                       inQ.vertPos_[he.endVert])
+                                 : Box();
+                 });
+      gpuPairsReady = gpu::FindCollisionsGpu2(
+          inQ.collider_, fwdQ, false, gpuFwdPairs,
+          inP.collider_, bwdQ, false, gpuBwdPairs);
+    }
+  }
+  if (gpuPairsReady) {
+    if (expandP_) {
+      xv12_ = Intersect12_<true, true>(inP, inQ, &gpuFwdPairs);
+      xv21_ = Intersect12_<true, false>(inP, inQ, &gpuBwdPairs);
+    } else {
+      xv12_ = Intersect12_<false, true>(inP, inQ, &gpuFwdPairs);
+      xv21_ = Intersect12_<false, false>(inP, inQ, &gpuBwdPairs);
+    }
+  } else
+#endif
+  {
+    xv12_ = Intersect12<true>(inP, inQ, expandP_);
+    xv21_ = Intersect12<false>(inP, inQ, expandP_);
+  }
 
   if (xv12_.x12.size() > INT_MAX_SZ || xv21_.x12.size() > INT_MAX_SZ) {
     valid = false;

@@ -19,10 +19,14 @@
 #include <algorithm>
 
 #include "boolean3.h"
+#include "collider.h"
 #include "csg_tree.h"
 #include "impl.h"
 #include "mesh_fixes.h"
 #include "parallel.h"
+#ifdef MANIFOLD_GPU
+#include "gpu/gpu_hal.h"
+#endif
 
 namespace {
 using namespace manifold;
@@ -139,8 +143,9 @@ std::shared_ptr<CsgLeafNode> ImplToLeaf(Manifold::Impl&& impl) {
       std::make_shared<Manifold::Impl>(std::move(impl)));
 }
 
-std::shared_ptr<CsgLeafNode> SimpleBoolean(const Manifold::Impl& a,
-                                           const Manifold::Impl& b, OpType op) {
+std::shared_ptr<CsgLeafNode> SimpleBoolean(
+    const Manifold::Impl& a, const Manifold::Impl& b, OpType op,
+    const Boolean3Pairs* precomputed = nullptr) {
 #ifdef MANIFOLD_DEBUG
   auto dump = [&]() {
     dump_lock.lock();
@@ -162,7 +167,7 @@ std::shared_ptr<CsgLeafNode> SimpleBoolean(const Manifold::Impl& a,
     dump_lock.unlock();
   };
   try {
-    Boolean3 boolean(a, b, op);
+    Boolean3 boolean(a, b, op, precomputed);
     auto impl = boolean.Result(op);
     if (ManifoldParams().selfIntersectionChecks && impl.IsSelfIntersecting()) {
       dump_lock.lock();
@@ -390,33 +395,105 @@ std::shared_ptr<CsgLeafNode> BatchBoolean(
   auto cmpFn = MeshCompare();
   std::make_heap(results.begin(), results.end(), cmpFn);
   std::vector<std::shared_ptr<CsgLeafNode>> tmp;
+  // Larger fan-out lets one GPU submit amortize across more booleans.
+  constexpr size_t kFanout = 8;
 #if MANIFOLD_PAR == 1
   tbb::task_group group;
-  // make sure the order of result is deterministic
-  std::vector<std::shared_ptr<CsgLeafNode>> parallelTmp;
-  for (int i = 0; i < 4; i++) parallelTmp.push_back(nullptr);
+  std::vector<std::shared_ptr<CsgLeafNode>> parallelTmp(kFanout);
 #endif
   while (results.size() > 1) {
-    for (size_t i = 0; i < 4 && results.size() > 1; i++) {
+    // Pop up to kFanout (a, b) pairs for this iteration.
+    std::vector<std::shared_ptr<CsgLeafNode>> aVec, bVec;
+    aVec.reserve(kFanout);
+    bVec.reserve(kFanout);
+    for (size_t i = 0; i < kFanout && results.size() > 1; i++) {
       std::pop_heap(results.begin(), results.end(), cmpFn);
       auto a = std::move(results.back());
       results.pop_back();
       std::pop_heap(results.begin(), results.end(), cmpFn);
       auto b = std::move(results.back());
       results.pop_back();
+      aVec.push_back(std::move(a));
+      bVec.push_back(std::move(b));
+    }
+    const size_t n = aVec.size();
+
+#ifdef MANIFOLD_GPU
+    // Fuse all pending booleans' collision queries into one GPU submit.
+    // 2 queries per boolean (forward + backward Intersect12).
+    std::vector<Boolean3Pairs> precomputed(n);
+    std::vector<Vec<Box>> fwdQ(n), bwdQ(n);
+    bool gpuOk = false;
+    auto& gpuCtx = gpu::GpuContext::instance();
+    if (gpuCtx.isAvailable() && operation != OpType::Subtract) {
+      bool allBigEnough = true;
+      for (size_t i = 0; i < n; i++) {
+        const auto& aImpl = *aVec[i]->GetImpl();
+        const auto& bImpl = *bVec[i]->GetImpl();
+        if (aImpl.halfedge_.size() <= gpu::kGpuCollisionThreshold ||
+            bImpl.halfedge_.size() <= gpu::kGpuCollisionThreshold) {
+          allBigEnough = false;
+          break;
+        }
+      }
+      if (allBigEnough) {
+        std::vector<gpu::CollisionJob> jobs;
+        jobs.reserve(2 * n);
+        for (size_t i = 0; i < n; i++) {
+          const auto& aImpl = *aVec[i]->GetImpl();
+          const auto& bImpl = *bVec[i]->GetImpl();
+          const size_t nA = aImpl.halfedge_.size();
+          const size_t nB = bImpl.halfedge_.size();
+          fwdQ[i].resize_nofill(nA);
+          bwdQ[i].resize_nofill(nB);
+          for_each_n(autoPolicy(nA, 1e4), countAt(size_t{0}), nA,
+                     [&, i](size_t k) {
+                       const Halfedge& he = aImpl.halfedge_[k];
+                       fwdQ[i][k] = he.IsForward()
+                                        ? Box(aImpl.vertPos_[he.startVert],
+                                              aImpl.vertPos_[he.endVert])
+                                        : Box();
+                     });
+          for_each_n(autoPolicy(nB, 1e4), countAt(size_t{0}), nB,
+                     [&, i](size_t k) {
+                       const Halfedge& he = bImpl.halfedge_[k];
+                       bwdQ[i][k] = he.IsForward()
+                                        ? Box(bImpl.vertPos_[he.startVert],
+                                              bImpl.vertPos_[he.endVert])
+                                        : Box();
+                     });
+          jobs.push_back({&bImpl.collider_, fwdQ[i], false,
+                          &precomputed[i].fwd});
+          jobs.push_back({&aImpl.collider_, bwdQ[i], false,
+                          &precomputed[i].bwd});
+        }
+        gpuOk = gpu::FindCollisionsGpuN(jobs);
+      }
+    }
+#endif
+
+    for (size_t i = 0; i < n; i++) {
+      auto a = aVec[i];
+      auto b = bVec[i];
+#ifdef MANIFOLD_GPU
+      const Boolean3Pairs* pairs = gpuOk ? &precomputed[i] : nullptr;
+#else
+      const Boolean3Pairs* pairs = nullptr;
+#endif
 #if MANIFOLD_PAR == 1
-      group.run([&, i, a, b]() {
-        parallelTmp[i] = SimpleBoolean(*a->GetImpl(), *b->GetImpl(), operation);
+      group.run([&, i, a, b, pairs]() {
+        parallelTmp[i] =
+            SimpleBoolean(*a->GetImpl(), *b->GetImpl(), operation, pairs);
       });
 #else
-      auto result = SimpleBoolean(*a->GetImpl(), *b->GetImpl(), operation);
-      tmp.push_back(result);
+      tmp.push_back(
+          SimpleBoolean(*a->GetImpl(), *b->GetImpl(), operation, pairs));
 #endif
     }
 #if MANIFOLD_PAR == 1
     group.wait();
-    for (int i = 0; i < 4 && parallelTmp[i]; i++)
-      tmp.emplace_back(std::move(parallelTmp[i]));
+    for (size_t i = 0; i < n; i++)
+      if (parallelTmp[i]) tmp.emplace_back(std::move(parallelTmp[i]));
 #endif
     for (auto result : tmp) {
       results.push_back(result);

@@ -110,4 +110,10 @@ target_include_directories(
 
 exportlib(manifold)
 
-install(TARGETS manifold EXPORT manifoldTargets)
+# WebGPU backend links against Dawn's many static lib targets which aren't
+# in any export set. Rather than chase Dawn's full transitive graph into
+# manifoldTargets, skip the CMake install/export for now when Dawn is on.
+# Real consumers (OpenSCAD) link statically from the build tree.
+if(NOT MANIFOLD_GPU_WEBGPU)
+  install(TARGETS manifold EXPORT manifoldTargets)
+endif()

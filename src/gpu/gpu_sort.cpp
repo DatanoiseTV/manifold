@@ -34,6 +34,16 @@ namespace {
 constexpr uint32_t kNoCode = 0xFFFFFFFFu;
 constexpr uint32_t kWorkgroupSize = 256;
 
+// Matches struct SortParams in radix_sort_histograms.wgsl and
+// radix_sort_scatter.wgsl. Laid out to satisfy WGSL uniform alignment (16B).
+struct SortParams {
+  uint32_t num_elements;
+  uint32_t shift;
+  uint32_t num_workgroups;
+  uint32_t num_blocks_per_workgroup;
+};
+static_assert(sizeof(SortParams) == 16, "SortParams must be 16 bytes");
+
 // Multi-workgroup GPU radix sort (VkRadixSort/Embree style).
 // Uses all GPU compute units. Two passes per radix digit:
 //   1. radix_sort_histograms: per-workgroup histogram
@@ -79,25 +89,23 @@ bool GpuSortByMorton(Vec<int>& new2Old, const Vec<uint32_t>& morton,
       histBuf = ctx.upload(zeros.data(), zeros.size() * sizeof(uint32_t));
     }
 
-    // Pass 1: Histograms.
+    SortParams params{n, shift, numWorkgroups, numBlocksPerWG};
+
+    // Pass 1: Histograms. Bindings: keys_in(0), histograms(1), params(2).
     batch->setBuffer(swapped ? keysB : keysA, 0);
     batch->setBuffer(histBuf, 1);
-    batch->setBytes(&n, sizeof(uint32_t), 2);
-    batch->setBytes(&shift, sizeof(uint32_t), 3);
-    batch->setBytes(&numBlocksPerWG, sizeof(uint32_t), 4);
+    batch->setBytes(&params, sizeof(params), 2);
     batch->dispatch(histPL, numWorkgroups, kWorkgroupSize);
     batch->barrier();
 
-    // Pass 2: Scatter.
+    // Pass 2: Scatter. Bindings: keys_in(0), vals_in(1), keys_out(2),
+    // vals_out(3), histograms(4), params(5).
     batch->setBuffer(swapped ? keysB : keysA, 0);
     batch->setBuffer(swapped ? valsB : valsA, 1);
     batch->setBuffer(swapped ? keysA : keysB, 2);
     batch->setBuffer(swapped ? valsA : valsB, 3);
     batch->setBuffer(histBuf, 4);
-    batch->setBytes(&n, sizeof(uint32_t), 5);
-    batch->setBytes(&shift, sizeof(uint32_t), 6);
-    batch->setBytes(&numWorkgroups, sizeof(uint32_t), 7);
-    batch->setBytes(&numBlocksPerWG, sizeof(uint32_t), 8);
+    batch->setBytes(&params, sizeof(params), 5);
     batch->dispatch(scatterPL, numWorkgroups, kWorkgroupSize);
 
     batch->commitAndWait();
@@ -148,10 +156,15 @@ void BuildColliderGpu(Collider& collider, const VecView<const Box>& leafBB,
       auto batch = ctx.createBatch();
       if (batch) {
         uint32_t groups = (numInternal + 255) / 256;
+        // TreeParams struct padded to 16 bytes for WGSL uniform alignment.
+        struct TreeParams {
+          int32_t num_leaves;
+          int32_t _pad[3];
+        } tparams{numLeaves, {0, 0, 0}};
         batch->setBuffer(gpuMorton, 0);
         batch->setBuffer(gpuParent, 1);
         batch->setBuffer(gpuChildren, 2);
-        batch->setBytes(&numLeaves, sizeof(int), 3);
+        batch->setBytes(&tparams, sizeof(tparams), 3);
         batch->dispatch(treePL, groups, 256);
         batch->commitAndWait();
 

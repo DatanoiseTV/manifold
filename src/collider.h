@@ -23,6 +23,21 @@ class Collider;
 namespace gpu {
 void BuildColliderGpu(Collider& collider, const VecView<const Box>& leafBB,
                       const VecView<const uint32_t>& leafMorton);
+bool FindCollisionsGpu(const Collider& collider,
+                       VecView<const Box> queries,
+                       bool selfCollision,
+                       Vec<std::pair<int, int>>& outPairs);
+bool FindCollisionsGpu2(const Collider& c1, VecView<const Box> q1, bool self1,
+                        Vec<std::pair<int, int>>& out1,
+                        const Collider& c2, VecView<const Box> q2, bool self2,
+                        Vec<std::pair<int, int>>& out2);
+struct CollisionJob {
+  const Collider* collider;
+  VecView<const Box> queries;
+  bool selfCollision;
+  Vec<std::pair<int, int>>* out;
+};
+bool FindCollisionsGpuN(const std::vector<CollisionJob>& jobs);
 }
 }  // namespace manifold
 
@@ -367,6 +382,18 @@ class Collider {
   friend void gpu::BuildColliderGpu(Collider& collider,
                                     const VecView<const Box>& leafBB,
                                     const VecView<const uint32_t>& leafMorton);
+  friend bool gpu::FindCollisionsGpu(const Collider& collider,
+                                     VecView<const Box> queries,
+                                     bool selfCollision,
+                                     Vec<std::pair<int, int>>& outPairs);
+  friend bool gpu::FindCollisionsGpu2(const Collider& c1,
+                                      VecView<const Box> q1, bool self1,
+                                      Vec<std::pair<int, int>>& out1,
+                                      const Collider& c2,
+                                      VecView<const Box> q2, bool self2,
+                                      Vec<std::pair<int, int>>& out2);
+  friend bool gpu::FindCollisionsGpuN(
+      const std::vector<gpu::CollisionJob>& jobs);
 
  private:
   Vec<Box> nodeBBox_;

@@ -21,6 +21,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <memory>
 #include <string>
 
@@ -32,7 +33,7 @@ namespace gpu {
 constexpr size_t kGpuSortThreshold = 8000;
 constexpr size_t kGpuCollisionThreshold = 5000;
 
-enum class Backend { None, Metal, OpenCL };
+enum class Backend { None, Metal, OpenCL, WebGPU };
 
 // ---------------------------------------------------------------------------
 // GpuBuffer — opaque GPU memory handle
@@ -90,8 +91,17 @@ class GpuCommandBatch {
   // Required when a later dispatch reads data written by an earlier one.
   virtual void barrier() = 0;
 
+  // Request that `bytes` starting at offset 0 of `src` be copied back to the
+  // host-side `dst` pointer as part of this batch's submit. All readbacks
+  // are fulfilled by the single commitAndWait() — avoids the extra
+  // submit+wait+map cycles incurred by post-hoc download() calls.
+  //
+  // `dst` must remain valid until commitAndWait() returns.
+  virtual void addReadback(GpuBufferPtr src, void* dst, size_t bytes) = 0;
+
   // Submit the entire batch to the GPU and wait for completion.
-  // After this call, all output buffers are safe to read.
+  // After this call, all output buffers are safe to read and all readbacks
+  // registered via addReadback have been copied to their destinations.
   virtual void commitAndWait() = 0;
 };
 
@@ -110,7 +120,12 @@ class GpuContext {
 
   // Which backend is active.
   virtual Backend backend() const = 0;
-  bool isAvailable() const { return backend() != Backend::None; }
+  bool isAvailable() const {
+    // Runtime escape hatch for A/B testing against CPU path.
+    static const bool disabled =
+        std::getenv("MANIFOLD_GPU_DISABLE") != nullptr;
+    return !disabled && backend() != Backend::None;
+  }
 
   // Does the GPU support native fp64 arithmetic?
   virtual bool hasFloat64() const = 0;

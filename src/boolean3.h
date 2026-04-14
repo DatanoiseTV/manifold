@@ -54,9 +54,18 @@ struct Intersections {
   Vec<vec3> v12;
 };
 
+// Optional pre-computed collision pair sets (from gpu::FindCollisionsGpuN).
+// When provided, Boolean3 skips its own internal GPU collision query and
+// feeds these straight into the fp64 intersection-math pipeline.
+struct Boolean3Pairs {
+  Vec<std::pair<int, int>> fwd;  // inP halfedges vs inQ faces
+  Vec<std::pair<int, int>> bwd;  // inQ halfedges vs inP faces
+};
+
 class Boolean3 {
  public:
-  Boolean3(const Manifold::Impl& inP, const Manifold::Impl& inQ, OpType op);
+  Boolean3(const Manifold::Impl& inP, const Manifold::Impl& inQ, OpType op,
+           const Boolean3Pairs* precomputed = nullptr);
   Manifold::Impl Result(OpType op) const;
 
  private:

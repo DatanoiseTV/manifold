@@ -18,7 +18,8 @@
 // All methods return failure/empty. This file always compiles on every
 // platform.
 
-#if !defined(MANIFOLD_GPU_METAL) && !defined(MANIFOLD_GPU_OPENCL)
+#if !defined(MANIFOLD_GPU_METAL) && !defined(MANIFOLD_GPU_OPENCL) && \
+    !defined(MANIFOLD_GPU_WEBGPU)
 
 namespace manifold {
 namespace gpu {
@@ -36,6 +37,11 @@ class NullContext : public GpuContext {
   GpuPipelinePtr getPipeline(const std::string&) override { return nullptr; }
   std::string deviceName() const override { return "none"; }
 };
+
+// Null batch is never constructed (createBatch returns nullptr), but the
+// abstract base still needs addReadback defined somewhere — inline via the
+// base class default. Provided for builds that link the null backend
+// alongside addReadback-calling code.
 
 NullContext g_nullContext;
 

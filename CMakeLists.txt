@@ -48,8 +48,12 @@ option(
 )
 option(MANIFOLD_PAR "Enable Parallel backend" OFF)
 option(MANIFOLD_GPU "Enable GPU compute acceleration" OFF)
-option(MANIFOLD_GPU_METAL "Use Metal GPU backend (macOS)" OFF)
-option(MANIFOLD_GPU_OPENCL "Use OpenCL GPU backend" OFF)
+option(MANIFOLD_GPU_METAL "Use Metal GPU backend (macOS, legacy)" OFF)
+option(MANIFOLD_GPU_OPENCL "Use OpenCL GPU backend (legacy)" OFF)
+option(MANIFOLD_GPU_WEBGPU "Use WebGPU backend via Dawn (cross-platform)" OFF)
+if(MANIFOLD_GPU_METAL OR MANIFOLD_GPU_OPENCL OR MANIFOLD_GPU_WEBGPU)
+  set(MANIFOLD_GPU ON CACHE BOOL "Enable GPU compute acceleration" FORCE)
+endif()
 option(
   MANIFOLD_OPTIMIZED
   "Force optimized build, even with debugging enabled"
@@ -273,11 +277,13 @@ write_basic_package_version_file(
 # https://cmake.org/cmake/help/latest/command/find_package.html
 set(EXPORT_INSTALL_DIR ${CMAKE_INSTALL_LIBDIR}/cmake)
 
-install(
-  EXPORT manifoldTargets
-  NAMESPACE manifold::
-  DESTINATION ${EXPORT_INSTALL_DIR}/manifold
-)
+if(NOT MANIFOLD_GPU_WEBGPU)
+  install(
+    EXPORT manifoldTargets
+    NAMESPACE manifold::
+    DESTINATION ${EXPORT_INSTALL_DIR}/manifold
+  )
+endif()
 install(
   FILES
     ${CMAKE_CURRENT_BINARY_DIR}/cmake/manifoldConfigVersion.cmake
