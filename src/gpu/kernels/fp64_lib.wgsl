@@ -531,9 +531,10 @@ fn fp64_div(a: vec2<u32>, b: vec2<u32>) -> vec2<u32> {
   // Restore sign
   if (fp64_sign(bScaled) != 0u) { x = fp64_neg(x); }
 
-  // Three Newton iterations: 24 -> 47 -> 94 -> bit-exact fp64 (saturates).
+  // Two Newton iterations: 24 -> 47 -> 94 bits. Saturates the 53-bit fp64
+  // mantissa; a third iteration would change nothing and burns ~3 fp64_muls.
   let two = fp64_pack(0u, 1 + 1023, 0x00100000u, 0u);  // exactly 2.0
-  for (var i = 0u; i < 3u; i = i + 1u) {
+  for (var i = 0u; i < 2u; i = i + 1u) {
     let bx = fp64_mul(bScaled, x);
     let t = fp64_sub(two, bx);
     x = fp64_mul(x, t);

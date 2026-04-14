@@ -135,37 +135,49 @@ bool IntersectGpu(const Manifold::Impl& inP, const Manifold::Impl& inQ,
              });
   auto bufPairs = ctx.upload(pairsFlat.data(), nPairs * 8);
 
-  auto bufOutX = ctx.allocate(nPairs * sizeof(int32_t));
-  auto bufOutV = ctx.allocate(nPairs * sizeof(GpuVec3F64));
-
-  if (!bufP_vp || !bufP_vn || !bufP_he || !bufP_fn || !bufQ_vp || !bufQ_vn ||
-      !bufQ_he || !bufQ_fn || !bufPairs || !bufOutX || !bufOutV) {
-    return false;
-  }
-
-  K12ParamsCpu p{static_cast<uint32_t>(nPairs), expandP ? 1u : 0u,
-                 forward ? 1u : 0u, 0u};
-
-  auto batch = ctx.createBatch();
-  if (!batch) return false;
-  batch->setBuffer(bufP_vp, 0);
-  batch->setBuffer(bufP_vn, 1);
-  batch->setBuffer(bufP_he, 2);
-  batch->setBuffer(bufP_fn, 3);
-  batch->setBuffer(bufQ_vp, 4);
-  batch->setBuffer(bufQ_vn, 5);
-  batch->setBuffer(bufQ_he, 6);
-  batch->setBuffer(bufQ_fn, 7);
-  batch->setBuffer(bufPairs, 8);
-  batch->setBuffer(bufOutX, 9);
-  batch->setBuffer(bufOutV, 10);
-  batch->setBytes(&p, sizeof(p), 11);
+  // Chunk pairs into submits that fit under Apple Silicon's 2-second GPU
+  // TDR. Each emulated-fp64 Kernel12 invocation is expensive; empirically
+  // ~2048 pairs per submit stays well under the TDR threshold while
+  // keeping submit overhead amortized.
+  constexpr size_t kChunkSize = 2048;
+  const size_t nChunks = (nPairs + kChunkSize - 1) / kChunkSize;
 
   Vec<GpuVec3F64> rawV(nPairs);
-  batch->dispatch(pl, static_cast<uint32_t>((nPairs + 63) / 64), 64);
-  batch->addReadback(bufOutX, outX.data(), nPairs * sizeof(int32_t));
-  batch->addReadback(bufOutV, rawV.data(), nPairs * sizeof(GpuVec3F64));
-  batch->commitAndWait();
+
+  for (size_t c = 0; c < nChunks; c++) {
+    const size_t off = c * kChunkSize;
+    const size_t cnt = std::min(kChunkSize, nPairs - off);
+
+    // New pair buffer scoped to this chunk. Upload a slice.
+    auto bufPairsChunk = ctx.upload(pairsFlat.data() + off, cnt * 8);
+    auto bufOutXChunk = ctx.allocate(cnt * sizeof(int32_t));
+    auto bufOutVChunk = ctx.allocate(cnt * sizeof(GpuVec3F64));
+    if (!bufPairsChunk || !bufOutXChunk || !bufOutVChunk) return false;
+
+    K12ParamsCpu p{static_cast<uint32_t>(cnt), expandP ? 1u : 0u,
+                   forward ? 1u : 0u, 0u};
+
+    auto batch = ctx.createBatch();
+    if (!batch) return false;
+    batch->setBuffer(bufP_vp, 0);
+    batch->setBuffer(bufP_vn, 1);
+    batch->setBuffer(bufP_he, 2);
+    batch->setBuffer(bufP_fn, 3);
+    batch->setBuffer(bufQ_vp, 4);
+    batch->setBuffer(bufQ_vn, 5);
+    batch->setBuffer(bufQ_he, 6);
+    batch->setBuffer(bufQ_fn, 7);
+    batch->setBuffer(bufPairsChunk, 8);
+    batch->setBuffer(bufOutXChunk, 9);
+    batch->setBuffer(bufOutVChunk, 10);
+    batch->setBytes(&p, sizeof(p), 11);
+    batch->dispatch(pl, static_cast<uint32_t>((cnt + 63) / 64), 64);
+    batch->addReadback(bufOutXChunk, outX.data() + off,
+                       cnt * sizeof(int32_t));
+    batch->addReadback(bufOutVChunk, rawV.data() + off,
+                       cnt * sizeof(GpuVec3F64));
+    batch->commitAndWait();
+  }
 
   for_each_n(autoPolicy(nPairs, 1e4), countAt(size_t{0}), nPairs,
              [&](size_t i) { outV[i] = UnpackVec3(rawV[i]); });

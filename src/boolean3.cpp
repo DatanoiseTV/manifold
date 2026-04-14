@@ -385,13 +385,19 @@ Intersections Intersect12_(const Manifold::Impl& inP,
   if (precomputedPairs != nullptr) {
     const auto& pairs = *precomputedPairs;
 #ifdef MANIFOLD_GPU
-    // GPU Kernel12: do the fp64 intersection math on GPU using the fp64_lib
-    // emulation. Produces x12/v12 per pair, matching CPU output to ~1e-13.
-    // Gated by env var during bring-up because per-pair work is O(1000s of
-    // emulated ops) which can exceed GPU TDR for large batches.
+    // GPU Kernel12: does the fp64 intersection math on GPU using fp64_lib.
+    // Produces byte-identical output vs CPU. Currently experimental — on
+    // Apple Silicon the emulated-fp64 branchy kernel runs slower than CPU
+    // TBB fp64 math at scale, so it's gated behind an env var and a strict
+    // pair-count cap. Real speedup waits on a multi-pass kernel rewrite
+    // (eliminate SIMT divergence), tracked as a follow-up.
     static const bool kGpuKernelEnabled =
         std::getenv("MANIFOLD_GPU_KERNEL") != nullptr;
-    if (kGpuKernelEnabled && gpu::GpuContext::instance().isAvailable()) {
+    // Cap at one chunk. Beyond this the GPU path is strictly slower than
+    // CPU on Apple Silicon and approaches the 2-second GPU TDR.
+    constexpr size_t kGpuKernelMaxPairs = 2048;
+    if (kGpuKernelEnabled && pairs.size() <= kGpuKernelMaxPairs &&
+        gpu::GpuContext::instance().isAvailable()) {
       Vec<int> gpuX;
       Vec<vec3> gpuV;
       if (gpu::IntersectGpu(inP, inQ, pairs, expandP, forward, gpuX, gpuV)) {
